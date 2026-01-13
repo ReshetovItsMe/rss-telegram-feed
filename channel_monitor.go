@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/samber/oops"
 )
 
 type ChannelMonitor struct {
@@ -114,12 +115,12 @@ func (m *ChannelMonitor) checkChannels() {
 
 func (m *ChannelMonitor) fetchChannelMessages(channelID string) error {
 	if m.bot == nil {
-		return fmt.Errorf("bot not initialized")
+		return oops.Errorf("bot not initialized")
 	}
 
 	channel, err := m.storage.GetChannel(channelID)
 	if err != nil {
-		return fmt.Errorf("failed to get channel: %w", err)
+		return oops.With("channel_id", channelID, "context", "failed to get channel").Wrap(err)
 	}
 
 	if !channel.IsActive {
@@ -160,7 +161,7 @@ func (m *ChannelMonitor) processMessage(channel *Channel, msg *models.Message) e
 
 	// Save message
 	if err := m.storage.SaveMessage(message); err != nil {
-		return fmt.Errorf("failed to save message: %w", err)
+		return oops.With("channel_id", channel.ID, "message_id", message.ID, "context", "failed to save message").Wrap(err)
 	}
 
 	// Update RSS feed

@@ -13,6 +13,7 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 	"github.com/samber/lo"
+	"github.com/samber/oops"
 )
 
 //go:generate go run github.com/abice/go-enum --file=$GOFILE --names --nocase
@@ -60,11 +61,11 @@ func LoadConfig() (*Config, error) {
 		case ".toml":
 			parser = toml.Parser()
 		default:
-			return nil, fmt.Errorf("unsupported config file extension: %s", ext)
+			return nil, oops.Errorf("unsupported config file extension: %s", ext)
 		}
 
 		if err := k.Load(file.Provider(configFile), parser); err != nil {
-			return nil, fmt.Errorf("failed to load config file %s: %w", configFile, err)
+			return nil, oops.With("config_file", configFile).Wrap(err)
 		}
 	}
 
@@ -75,7 +76,7 @@ func LoadConfig() (*Config, error) {
 		// TELEGRAM_BOT_TOKEN -> telegram_bot_token
 		return strings.ToLower(s)
 	}), nil); err != nil {
-		return nil, fmt.Errorf("failed to load environment variables: %w", err)
+		return nil, oops.With("context", "loading environment variables").Wrap(err)
 	}
 
 	// Set defaults
@@ -98,7 +99,7 @@ func LoadConfig() (*Config, error) {
 	// Unmarshal into struct
 	var cfg Config
 	if err := k.Unmarshal("", &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+		return nil, oops.With("context", "unmarshaling config").Wrap(err)
 	}
 
 	// Parse AllowedUsers from comma-separated string if it's a string

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/gorilla/feeds"
+	"github.com/samber/oops"
 )
 
 type FeedService struct {
@@ -20,12 +21,12 @@ func NewFeedService(storage Storage) *FeedService {
 func (s *FeedService) GenerateFeed(channelID string, baseURL string) (*feeds.Feed, error) {
 	channel, err := s.storage.GetChannel(channelID)
 	if err != nil {
-		return nil, fmt.Errorf("channel not found %s: %w", channelID, err)
+		return nil, oops.With("channel_id", channelID, "context", "channel not found").Wrap(err)
 	}
 
 	messages, err := s.storage.GetMessages(channelID, 50) // Get last 50 messages
 	if err != nil {
-		return nil, fmt.Errorf("failed to get messages for channel %s: %w", channelID, err)
+		return nil, oops.With("channel_id", channelID, "context", "failed to get messages").Wrap(err)
 	}
 
 	feed := &feeds.Feed{

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/samber/lo"
+	"github.com/samber/oops"
 )
 
 type Storage interface {
@@ -31,14 +32,14 @@ type FileStorage struct {
 
 func NewFileStorage(basePath string) (*FileStorage, error) {
 	if err := os.MkdirAll(basePath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create storage directory: %w", err)
+		return nil, oops.With("base_path", basePath, "context", "failed to create storage directory").Wrap(err)
 	}
 
 	// Create subdirectories using lo
 	dirs := []string{"channels", "messages", "users"}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(filepath.Join(basePath, dir), 0755); err != nil {
-			return nil, fmt.Errorf("failed to create %s directory: %w", dir, err)
+			return nil, oops.With("base_path", basePath, "directory", dir, "context", "failed to create directory").Wrap(err)
 		}
 	}
 
@@ -52,7 +53,7 @@ func (s *FileStorage) SaveChannel(channel *Channel) error {
 	path := filepath.Join(s.basePath, "channels", channel.ID+".json")
 	data, err := json.MarshalIndent(channel, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal channel: %w", err)
+		return oops.With("channel_id", channel.ID, "context", "failed to marshal channel").Wrap(err)
 	}
 
 	return os.WriteFile(path, data, 0644)
@@ -68,12 +69,12 @@ func (s *FileStorage) GetChannel(channelID string) (*Channel, error) {
 		if os.IsNotExist(err) {
 			return nil, ErrChannelNotFound
 		}
-		return nil, fmt.Errorf("failed to read channel: %w", err)
+		return nil, oops.With("channel_id", channelID, "context", "failed to read channel").Wrap(err)
 	}
 
 	var channel Channel
 	if err := json.Unmarshal(data, &channel); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal channel: %w", err)
+		return nil, oops.With("channel_id", channelID, "context", "failed to unmarshal channel").Wrap(err)
 	}
 
 	return &channel, nil
@@ -86,7 +87,7 @@ func (s *FileStorage) GetAllChannels() ([]*Channel, error) {
 	dir := filepath.Join(s.basePath, "channels")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read channels directory: %w", err)
+		return nil, oops.With("directory", dir, "context", "failed to read channels directory").Wrap(err)
 	}
 
 	// Use lo.FilterMap to process entries
@@ -127,13 +128,13 @@ func (s *FileStorage) SaveMessage(message *Message) error {
 	// Store messages in channel-specific directories
 	msgDir := filepath.Join(s.basePath, "messages", message.ChannelID)
 	if err := os.MkdirAll(msgDir, 0755); err != nil {
-		return fmt.Errorf("failed to create message directory: %w", err)
+		return oops.With("message_dir", msgDir, "context", "failed to create message directory").Wrap(err)
 	}
 
 	path := filepath.Join(msgDir, fmt.Sprintf("%d.json", message.ID))
 	data, err := json.MarshalIndent(message, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
+		return oops.With("channel_id", message.ChannelID, "message_id", message.ID, "context", "failed to marshal message").Wrap(err)
 	}
 
 	return os.WriteFile(path, data, 0644)
@@ -149,7 +150,7 @@ func (s *FileStorage) GetMessages(channelID string, limit int) ([]*Message, erro
 		if os.IsNotExist(err) {
 			return []*Message{}, nil
 		}
-		return nil, fmt.Errorf("failed to read messages directory: %w", err)
+		return nil, oops.With("channel_id", channelID, "message_dir", msgDir, "context", "failed to read messages directory").Wrap(err)
 	}
 
 	var messages []*Message
@@ -188,7 +189,7 @@ func (s *FileStorage) GetRecentMessages(channelID string, since time.Time) ([]*M
 		if os.IsNotExist(err) {
 			return []*Message{}, nil
 		}
-		return nil, fmt.Errorf("failed to read messages directory: %w", err)
+		return nil, oops.With("channel_id", channelID, "message_dir", msgDir, "context", "failed to read messages directory").Wrap(err)
 	}
 
 	var messages []*Message
@@ -223,7 +224,7 @@ func (s *FileStorage) SaveUser(user *User) error {
 	path := filepath.Join(s.basePath, "users", fmt.Sprintf("%d.json", user.ID))
 	data, err := json.MarshalIndent(user, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal user: %w", err)
+		return oops.With("user_id", user.ID, "context", "failed to marshal user").Wrap(err)
 	}
 
 	return os.WriteFile(path, data, 0644)
@@ -237,14 +238,14 @@ func (s *FileStorage) GetUser(userID int64) (*User, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("user not found")
+			return nil, oops.With("user_id", userID).New("user not found")
 		}
-		return nil, fmt.Errorf("failed to read user: %w", err)
+		return nil, oops.With("user_id", userID, "context", "failed to read user").Wrap(err)
 	}
 
 	var user User
 	if err := json.Unmarshal(data, &user); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal user: %w", err)
+		return nil, oops.With("user_id", userID, "context", "failed to unmarshal user").Wrap(err)
 	}
 
 	return &user, nil
@@ -257,7 +258,7 @@ func (s *FileStorage) GetAllUsers() ([]*User, error) {
 	dir := filepath.Join(s.basePath, "users")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read users directory: %w", err)
+		return nil, oops.With("directory", dir, "context", "failed to read users directory").Wrap(err)
 	}
 
 	var users []*User

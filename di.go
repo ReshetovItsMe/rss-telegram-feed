@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/go-telegram/bot"
 	"github.com/samber/do/v2"
+	"github.com/samber/oops"
 )
 
 // Service names for dependency injection
@@ -28,7 +28,7 @@ func SetupDI() (do.Injector, error) {
 	do.Provide(injector, func(i do.Injector) (*Config, error) {
 		cfg, err := LoadConfig()
 		if err != nil {
-			return nil, fmt.Errorf("failed to load config: %w", err)
+			return nil, oops.With("context", "failed to load config").Wrap(err)
 		}
 		return cfg, nil
 	})
@@ -38,7 +38,7 @@ func SetupDI() (do.Injector, error) {
 		cfg := do.MustInvoke[*Config](i)
 		storage, err := NewFileStorage(cfg.StoragePath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize storage at %s: %w", cfg.StoragePath, err)
+			return nil, oops.With("storage_path", cfg.StoragePath, "context", "failed to initialize storage").Wrap(err)
 		}
 		return storage, nil
 	})
@@ -87,7 +87,7 @@ func SetupDI() (do.Injector, error) {
 
 		b, err := bot.New(cfg.TelegramBotToken, opts...)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create telegram bot: %w", err)
+			return nil, oops.With("context", "failed to create telegram bot").Wrap(err)
 		}
 
 		// Register bot commands
