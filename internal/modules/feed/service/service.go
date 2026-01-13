@@ -1,30 +1,38 @@
-package main
+package service
 
 import (
 	"fmt"
 	"log/slog"
 
 	"github.com/gorilla/feeds"
+	channelRepo "github.com/reshetovitsme/rss-telegram-feed/internal/modules/channel/repository"
+	"github.com/reshetovitsme/rss-telegram-feed/internal/modules/message/domain"
+	messageRepo "github.com/reshetovitsme/rss-telegram-feed/internal/modules/message/repository"
 	"github.com/samber/oops"
 )
 
-type FeedService struct {
-	storage Storage
+// Service handles RSS feed generation
+type Service struct {
+	channelRepo channelRepo.Repository
+	messageRepo messageRepo.Repository
 }
 
-func NewFeedService(storage Storage) *FeedService {
-	return &FeedService{
-		storage: storage,
+// New creates a new feed service
+func New(channelRepo channelRepo.Repository, messageRepo messageRepo.Repository) *Service {
+	return &Service{
+		channelRepo: channelRepo,
+		messageRepo: messageRepo,
 	}
 }
 
-func (s *FeedService) GenerateFeed(channelID string, baseURL string) (*feeds.Feed, error) {
-	channel, err := s.storage.GetChannel(channelID)
+// GenerateFeed generates an RSS feed for a channel
+func (s *Service) GenerateFeed(channelID string, baseURL string) (*feeds.Feed, error) {
+	channel, err := s.channelRepo.GetChannel(channelID)
 	if err != nil {
 		return nil, oops.With("channel_id", channelID, "context", "channel not found").Wrap(err)
 	}
 
-	messages, err := s.storage.GetMessages(channelID, 50) // Get last 50 messages
+	messages, err := s.messageRepo.GetMessages(channelID, 50) // Get last 50 messages
 	if err != nil {
 		return nil, oops.With("channel_id", channelID, "context", "failed to get messages").Wrap(err)
 	}
@@ -48,7 +56,15 @@ func (s *FeedService) GenerateFeed(channelID string, baseURL string) (*feeds.Fee
 	return feed, nil
 }
 
-func (s *FeedService) messageToFeedItem(msg *Message, baseURL string) *feeds.Item {
+// UpdateFeed triggers feed regeneration (placeholder for future caching)
+func (s *Service) UpdateFeed(channelID string) error {
+	// This method can be used to trigger feed regeneration
+	// For now, feeds are generated on-demand when requested
+	slog.Debug("Feed update requested", "channel_id", channelID)
+	return nil
+}
+
+func (s *Service) messageToFeedItem(msg *domain.Message, baseURL string) *feeds.Item {
 	description := msg.Text
 	if description == "" {
 		description = "No text content"
@@ -86,14 +102,6 @@ func (s *FeedService) messageToFeedItem(msg *Message, baseURL string) *feeds.Ite
 	}
 
 	return item
-}
-
-func (s *FeedService) UpdateFeed(channelID string) error {
-	// This method can be used to trigger feed regeneration
-	// For now, feeds are generated on-demand when requested
-	// In a production system, you might want to cache feeds
-	slog.Debug("Feed update requested", "channel_id", channelID)
-	return nil
 }
 
 func truncate(s string, maxLen int) string {

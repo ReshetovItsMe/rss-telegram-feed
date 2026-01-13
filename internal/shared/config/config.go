@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"fmt"
@@ -12,27 +12,23 @@ import (
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
+	"github.com/reshetovitsme/rss-telegram-feed/internal/modules/channel/domain"
+	"github.com/reshetovitsme/rss-telegram-feed/internal/shared/errors"
 	"github.com/samber/lo"
 	"github.com/samber/oops"
 )
 
-//go:generate go run github.com/abice/go-enum --file=$GOFILE --names --nocase
-
-// AppEnv represents the application environment
-// ENUM(local,production,development,testing)
-type AppEnv string
-
 type Config struct {
-	TelegramBotToken string  `koanf:"telegram_bot_token"`
-	TelegramAPIURL   string  `koanf:"telegram_api_url"`
-	StoragePath      string  `koanf:"storage_path"`
-	HTTPPort         string  `koanf:"http_port"`
-	UpdateInterval   int     `koanf:"update_interval"`
-	AllowedUsers     []int64 `koanf:"allowed_users"`
-	AppEnv           AppEnv  `koanf:"app_env"`
+	TelegramBotToken string              `koanf:"telegram_bot_token"`
+	TelegramAPIURL   string              `koanf:"telegram_api_url"`
+	StoragePath      string              `koanf:"storage_path"`
+	HTTPPort         string              `koanf:"http_port"`
+	UpdateInterval   int                 `koanf:"update_interval"`
+	AllowedUsers     []int64             `koanf:"allowed_users"`
+	AppEnv           domain.AppEnv       `koanf:"app_env"`
 }
 
-func LoadConfig() (*Config, error) {
+func Load() (*Config, error) {
 	k := koanf.New(".")
 
 	// Try to load config file from various formats
@@ -70,10 +66,7 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Load environment variables (they override config file values)
-	// Convert TELEGRAM_BOT_TOKEN -> telegram_bot_token
 	if err := k.Load(env.Provider("", ".", func(s string) string {
-		// Convert uppercase with underscores to lowercase with underscores
-		// TELEGRAM_BOT_TOKEN -> telegram_bot_token
 		return strings.ToLower(s)
 	}), nil); err != nil {
 		return nil, oops.With("context", "loading environment variables").Wrap(err)
@@ -103,13 +96,11 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Parse AllowedUsers from comma-separated string if it's a string
-	// koanf might return it as a string from env vars or as a slice from config files
 	if allowedUsers := k.Get("allowed_users"); allowedUsers != nil {
 		switch v := allowedUsers.(type) {
 		case string:
 			cfg.AllowedUsers = ParseAllowedUsers(v)
 		case []interface{}:
-			// Convert []interface{} to []int64 using lo
 			cfg.AllowedUsers = lo.FilterMap(v, func(item interface{}, _ int) (int64, bool) {
 				switch val := item.(type) {
 				case int64:
@@ -126,26 +117,25 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Parse AppEnv from string if needed
-	// Note: ParseAppEnv and AppEnvProduction will be available after running go generate
 	if appEnvStr := k.String("app_env"); appEnvStr != "" {
-		if env, err := ParseAppEnv(appEnvStr); err == nil {
+		if env, err := domain.ParseAppEnv(appEnvStr); err == nil {
 			cfg.AppEnv = env
 		} else {
-			cfg.AppEnv = AppEnv("production") // Default fallback until enum is generated
+			cfg.AppEnv = domain.AppEnvProduction
 		}
 	} else {
-		cfg.AppEnv = AppEnv("production") // Default fallback until enum is generated
+		cfg.AppEnv = domain.AppEnvProduction
 	}
 
 	// Validate required fields
 	if cfg.TelegramBotToken == "" {
-		return nil, ErrMissingBotToken
+		return nil, errors.ErrMissingBotToken
 	}
 
 	return &cfg, nil
 }
 
-// ParseAllowedUsers parses comma-separated user IDs string into []int64 using lo
+// ParseAllowedUsers parses comma-separated user IDs string into []int64
 func ParseAllowedUsers(s string) []int64 {
 	if s == "" {
 		return []int64{}

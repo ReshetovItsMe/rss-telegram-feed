@@ -1,4 +1,4 @@
-package main
+package http
 
 import (
 	"fmt"
@@ -6,28 +6,34 @@ import (
 	"net/http"
 	"time"
 
+	feedService "github.com/reshetovitsme/rss-telegram-feed/internal/modules/feed/service"
+	"github.com/reshetovitsme/rss-telegram-feed/internal/shared/config"
 	sloghttp "github.com/samber/slog-http"
 )
 
-type RSSServer struct {
-	cfg         *Config
-	feedService *FeedService
+// Server handles HTTP requests for RSS feeds
+type Server struct {
+	cfg         *config.Config
+	feedService *feedService.Service
 	logger      *slog.Logger
 }
 
-func NewRSSServer(cfg *Config, feedService *FeedService) *RSSServer {
-	return &RSSServer{
+// New creates a new HTTP server
+func New(cfg *config.Config, feedService *feedService.Service) *Server {
+	return &Server{
 		cfg:         cfg,
 		feedService: feedService,
 		logger:      slog.Default(),
 	}
 }
 
-func (s *RSSServer) SetLogger(logger *slog.Logger) {
+// SetLogger sets the logger
+func (s *Server) SetLogger(logger *slog.Logger) {
 	s.logger = logger
 }
 
-func (s *RSSServer) Start() error {
+// Start starts the HTTP server
+func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
 	// RSS feed endpoint
@@ -57,7 +63,7 @@ func (s *RSSServer) Start() error {
 	return server.ListenAndServe()
 }
 
-func (s *RSSServer) handleRSSFeed(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRSSFeed(w http.ResponseWriter, r *http.Request) {
 	channelID := r.PathValue("channelID")
 	if channelID == "" {
 		http.Error(w, "Channel ID is required", http.StatusBadRequest)
@@ -88,13 +94,13 @@ func (s *RSSServer) handleRSSFeed(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(rss))
 }
 
-func (s *RSSServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-func (s *RSSServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	html := `<!DOCTYPE html>
 <html>
 <head>

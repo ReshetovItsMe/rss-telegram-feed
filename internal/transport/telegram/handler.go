@@ -1,4 +1,4 @@
-package main
+package telegram
 
 import (
 	"context"
@@ -10,26 +10,35 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	"github.com/samber/lo"
+	channelDomain "github.com/reshetovitsme/rss-telegram-feed/internal/modules/channel/domain"
+	channelService "github.com/reshetovitsme/rss-telegram-feed/internal/modules/channel/service"
+	feedService "github.com/reshetovitsme/rss-telegram-feed/internal/modules/feed/service"
+	messageDomain "github.com/reshetovitsme/rss-telegram-feed/internal/modules/message/domain"
+	userDomain "github.com/reshetovitsme/rss-telegram-feed/internal/modules/user/domain"
+	userService "github.com/reshetovitsme/rss-telegram-feed/internal/modules/user/service"
+	"github.com/reshetovitsme/rss-telegram-feed/internal/shared/config"
 )
 
-type BotHandler struct {
-	cfg            *Config
-	storage        Storage
-	channelMonitor *ChannelMonitor
-	feedService    *FeedService
+// Handler handles Telegram bot interactions
+type Handler struct {
+	cfg            *config.Config
+	channelService *channelService.Service
+	feedService    *feedService.Service
+	userService    *userService.Service
 }
 
-func NewBotHandler(cfg *Config, storage Storage, monitor *ChannelMonitor, feedService *FeedService) *BotHandler {
-	return &BotHandler{
+// New creates a new Telegram handler
+func New(cfg *config.Config, channelService *channelService.Service, feedService *feedService.Service, userService *userService.Service) *Handler {
+	return &Handler{
 		cfg:            cfg,
-		storage:        storage,
-		channelMonitor: monitor,
+		channelService: channelService,
 		feedService:    feedService,
+		userService:    userService,
 	}
 }
 
-func (h *BotHandler) RegisterCommands(b *bot.Bot) {
+// RegisterCommands registers bot commands
+func (h *Handler) RegisterCommands(b *bot.Bot) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, h.handleStart)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.handleHelp)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/addchannel", bot.MatchTypePrefix, h.handleAddChannel)
@@ -41,20 +50,19 @@ func (h *BotHandler) RegisterCommands(b *bot.Bot) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/status", bot.MatchTypeExact, h.handleStatus)
 }
 
-func (h *BotHandler) HandleUpdate(ctx context.Context, b *bot.Bot, update *models.Update) {
+// HandleUpdate processes incoming updates
+func (h *Handler) HandleUpdate(ctx context.Context, b *bot.Bot, update *models.Update) {
 	// Process channel posts and messages
 	if update.ChannelPost != nil {
-		// Channel post (message sent to a channel)
 		h.processChannelPost(ctx, b, update.ChannelPost)
 	} else if update.Message != nil {
-		// Regular message (could be from a channel if bot is member)
 		if update.Message.Chat.Type == "channel" {
 			h.processChannelPost(ctx, b, update.Message)
 		}
 	}
 }
 
-func (h *BotHandler) processChannelPost(ctx context.Context, b *bot.Bot, msg *models.Message) {
+func (h *Handler) processChannelPost(ctx context.Context, b *bot.Bot, msg *models.Message) {
 	if msg == nil {
 		return
 	}
@@ -62,7 +70,7 @@ func (h *BotHandler) processChannelPost(ctx context.Context, b *bot.Bot, msg *mo
 	channelID := fmt.Sprintf("%d", msg.Chat.ID)
 
 	// Check if this channel is being monitored
-	channel, err := h.storage.GetChannel(channelID)
+	channel, err := h.channelService.GetChannel(channelID)
 	if err != nil {
 		// Channel not in our list, ignore
 		return
@@ -72,167 +80,42 @@ func (h *BotHandler) processChannelPost(ctx context.Context, b *bot.Bot, msg *mo
 		return
 	}
 
-	// Process the message through channel monitor
-	// We need to access the channel monitor - let's add it to bot handler
-	if h.channelMonitor != nil {
-		// Convert to our message format and process
-		message := &Message{
-			ID:          int64(msg.ID),
-			ChannelID:   channelID,
-			ChannelName: channel.Title,
-			Text:        msg.Text,
-			Date:        time.Unix(int64(msg.Date), 0),
-			Author:      getAuthorName(msg),
-			Media:       extractMedia(msg),
-			Link:        fmt.Sprintf("https://t.me/%s/%d", channel.Username, msg.ID),
-		}
-
-		// Apply filters
-		if !h.passesFilters(channel, msg) {
-			return
-		}
-
-		// Save message
-		if err := h.storage.SaveMessage(message); err != nil {
-			slog.Error("Error saving message", "error", err, "channel_id", channelID, "message_id", msg.ID)
-			return
-		}
-
-		// Update RSS feed
-		if h.feedService != nil {
-			if err := h.feedService.UpdateFeed(channelID); err != nil {
-				slog.Error("Error updating feed", "error", err, "channel_id", channelID)
-			}
-		}
-		slog.Info("New message from channel", "channel", channel.Username, "channel_id", channelID, "message_id", msg.ID)
-	}
-}
-
-func (h *BotHandler) passesFilters(channel *Channel, msg *models.Message) bool {
-	if len(channel.Filters) == 0 {
-		return true
-	}
-
+	// Extract message data
 	text := msg.Text
 	if text == "" && msg.Caption != "" {
 		text = msg.Caption
 	}
 
-	for _, filter := range channel.Filters {
-		if !filter.Enabled {
-			continue
-		}
+	media := extractMedia(msg)
+	author := getAuthorName(msg)
+	link := fmt.Sprintf("https://t.me/%s/%d", channel.Username, msg.ID)
 
-		switch filter.Type {
-		case FilterTypeKeywords:
-			// Check if any keyword is present
-			matches := lo.ContainsBy(filter.Keywords, func(keyword string) bool {
-				return containsKeyword(text, keyword)
-			})
-			if !matches {
-				return false
-			}
-		case FilterTypeExcludeKeywords:
-			// Check if any exclude keyword is present
-			if lo.ContainsBy(filter.Keywords, func(keyword string) bool {
-				return containsKeyword(text, keyword)
-			}) {
-				return false
-			}
-		case FilterTypeAuthor:
-			// Author filtering can be implemented here if needed
-		}
+	// Process message through channel service
+	if err := h.channelService.ProcessMessage(channel, text, int64(msg.Date), int64(msg.ID), author, media, link); err != nil {
+		slog.Error("Error processing message", "error", err, "channel_id", channelID, "message_id", msg.ID)
+		return
 	}
 
-	return true
+	slog.Info("New message from channel", "channel", channel.Username, "channel_id", channelID, "message_id", msg.ID)
 }
 
-func containsKeyword(text, keyword string) bool {
-	if len(keyword) == 0 {
-		return false
-	}
-	textLower := strings.ToLower(text)
-	keywordLower := strings.ToLower(keyword)
-	return strings.Contains(textLower, keywordLower)
+func (h *Handler) checkAuthorization(userID int64) bool {
+	return h.userService.IsAuthorized(userID, h.cfg.AllowedUsers)
 }
 
-func getAuthorName(msg *models.Message) string {
-	if msg.From != nil {
-		if msg.From.Username != "" {
-			return "@" + msg.From.Username
-		}
-		if msg.From.FirstName != "" {
-			return msg.From.FirstName
-		}
-	}
-	return "Unknown"
-}
-
-func extractMedia(msg *models.Message) []Media {
-	var media []Media
-
-	if msg.Photo != nil && len(msg.Photo) > 0 {
-		// Get the largest photo
-		photo := msg.Photo[len(msg.Photo)-1]
-		media = append(media, Media{
-			Type:   MediaTypePhoto,
-			FileID: photo.FileID,
-		})
-	}
-
-	if msg.Video != nil {
-		media = append(media, Media{
-			Type:   MediaTypeVideo,
-			FileID: msg.Video.FileID,
-		})
-	}
-
-	if msg.Document != nil {
-		media = append(media, Media{
-			Type:   MediaTypeDocument,
-			FileID: msg.Document.FileID,
-		})
-	}
-
-	if msg.Audio != nil {
-		media = append(media, Media{
-			Type:   MediaTypeAudio,
-			FileID: msg.Audio.FileID,
-		})
-	}
-
-	return media
-}
-
-func (h *BotHandler) checkAuthorization(userID int64) bool {
-	// Check if user is in allowed users list
-	if len(h.cfg.AllowedUsers) > 0 {
-		for _, id := range h.cfg.AllowedUsers {
-			if id == userID {
-				return true
-			}
-		}
-		return false
-	}
-
-	// If no allowed users configured, check if user exists in storage
-	_, err := h.storage.GetUser(userID)
-	return err == nil
-}
-
-func (h *BotHandler) handleStart(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleStart(ctx context.Context, b *bot.Bot, update *models.Update) {
 	userID := update.Message.From.ID
 
 	if !h.checkAuthorization(userID) {
 		// Auto-add first user as admin if no users configured
 		if len(h.cfg.AllowedUsers) == 0 {
-			user := &User{
+			user := &userDomain.User{
 				ID:       userID,
 				Username: update.Message.From.Username,
 				AddedAt:  time.Now(),
 				IsAdmin:  true,
 			}
-			if err := h.storage.SaveUser(user); err != nil {
+			if err := h.userService.SaveUser(user); err != nil {
 				slog.Error("Failed to save user", "error", err, "user_id", userID)
 			}
 		} else {
@@ -267,11 +150,11 @@ Example:
 	})
 }
 
-func (h *BotHandler) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update) {
 	h.handleStart(ctx, b, update)
 }
 
-func (h *BotHandler) handleAddChannel(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleAddChannel(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.checkAuthorization(update.Message.From.ID) {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -303,18 +186,18 @@ func (h *BotHandler) handleAddChannel(ctx context.Context, b *bot.Bot, update *m
 		return
 	}
 
-	channel := &Channel{
+	channel := &channelDomain.Channel{
 		ID:         fmt.Sprintf("%d", chat.ID),
 		Username:   channelUsername,
 		Title:      chat.Title,
 		AddedBy:    update.Message.From.ID,
 		AddedAt:    time.Now(),
-		Filters:    []Filter{},
+		Filters:    []channelDomain.Filter{},
 		LastUpdate: time.Now(),
 		IsActive:   true,
 	}
 
-	if err := h.storage.SaveChannel(channel); err != nil {
+	if err := h.channelService.SaveChannel(channel); err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("❌ Failed to save channel: %v", err),
@@ -323,7 +206,7 @@ func (h *BotHandler) handleAddChannel(ctx context.Context, b *bot.Bot, update *m
 	}
 
 	// Start monitoring this channel
-	h.channelMonitor.AddChannel(channel.ID)
+	h.channelService.AddChannel(channel.ID)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
@@ -331,7 +214,55 @@ func (h *BotHandler) handleAddChannel(ctx context.Context, b *bot.Bot, update *m
 	})
 }
 
-func (h *BotHandler) handleRemoveChannel(ctx context.Context, b *bot.Bot, update *models.Update) {
+// Helper functions
+func getAuthorName(msg *models.Message) string {
+	if msg.From != nil {
+		if msg.From.Username != "" {
+			return "@" + msg.From.Username
+		}
+		if msg.From.FirstName != "" {
+			return msg.From.FirstName
+		}
+	}
+	return "Unknown"
+}
+
+func extractMedia(msg *models.Message) []messageDomain.Media {
+	var media []messageDomain.Media
+
+	if msg.Photo != nil && len(msg.Photo) > 0 {
+		photo := msg.Photo[len(msg.Photo)-1]
+		media = append(media, messageDomain.Media{
+			Type:   messageDomain.MediaTypePhoto,
+			FileID: photo.FileID,
+		})
+	}
+
+	if msg.Video != nil {
+		media = append(media, messageDomain.Media{
+			Type:   messageDomain.MediaTypeVideo,
+			FileID: msg.Video.FileID,
+		})
+	}
+
+	if msg.Document != nil {
+		media = append(media, messageDomain.Media{
+			Type:   messageDomain.MediaTypeDocument,
+			FileID: msg.Document.FileID,
+		})
+	}
+
+	if msg.Audio != nil {
+		media = append(media, messageDomain.Media{
+			Type:   messageDomain.MediaTypeAudio,
+			FileID: msg.Audio.FileID,
+		})
+	}
+
+	return media
+}
+
+func (h *Handler) handleRemoveChannel(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.checkAuthorization(update.Message.From.ID) {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -350,7 +281,7 @@ func (h *BotHandler) handleRemoveChannel(ctx context.Context, b *bot.Bot, update
 	}
 
 	channelID := parts[1]
-	if err := h.storage.DeleteChannel(channelID); err != nil {
+	if err := h.channelService.DeleteChannel(channelID); err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("❌ Failed to remove channel: %v", err),
@@ -358,15 +289,13 @@ func (h *BotHandler) handleRemoveChannel(ctx context.Context, b *bot.Bot, update
 		return
 	}
 
-	h.channelMonitor.RemoveChannel(channelID)
-
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("✅ Channel %s removed successfully!", channelID),
 	})
 }
 
-func (h *BotHandler) handleListChannels(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleListChannels(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.checkAuthorization(update.Message.From.ID) {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -375,7 +304,7 @@ func (h *BotHandler) handleListChannels(ctx context.Context, b *bot.Bot, update 
 		return
 	}
 
-	channels, err := h.storage.GetAllChannels()
+	channels, err := h.channelService.GetAllChannels()
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -409,7 +338,7 @@ func (h *BotHandler) handleListChannels(ctx context.Context, b *bot.Bot, update 
 	})
 }
 
-func (h *BotHandler) handleAddFilter(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleAddFilter(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.checkAuthorization(update.Message.From.ID) {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -430,7 +359,7 @@ func (h *BotHandler) handleAddFilter(ctx context.Context, b *bot.Bot, update *mo
 	channelID := parts[1]
 	keywords := strings.Split(parts[2], ",")
 
-	channel, err := h.storage.GetChannel(channelID)
+	channel, err := h.channelService.GetChannel(channelID)
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -439,15 +368,15 @@ func (h *BotHandler) handleAddFilter(ctx context.Context, b *bot.Bot, update *mo
 		return
 	}
 
-	filter := Filter{
-		Type:     FilterTypeKeywords,
+	filter := channelDomain.Filter{
+		Type:     channelDomain.FilterTypeKeywords,
 		Keywords: keywords,
 		Enabled:  true,
 	}
 
 	channel.Filters = append(channel.Filters, filter)
 
-	if err := h.storage.SaveChannel(channel); err != nil {
+	if err := h.channelService.SaveChannel(channel); err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("❌ Failed to save filter: %v", err),
@@ -461,7 +390,7 @@ func (h *BotHandler) handleAddFilter(ctx context.Context, b *bot.Bot, update *mo
 	})
 }
 
-func (h *BotHandler) handleRemoveFilter(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleRemoveFilter(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.checkAuthorization(update.Message.From.ID) {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -489,7 +418,7 @@ func (h *BotHandler) handleRemoveFilter(ctx context.Context, b *bot.Bot, update 
 		return
 	}
 
-	channel, err := h.storage.GetChannel(channelID)
+	channel, err := h.channelService.GetChannel(channelID)
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -508,7 +437,7 @@ func (h *BotHandler) handleRemoveFilter(ctx context.Context, b *bot.Bot, update 
 
 	channel.Filters = append(channel.Filters[:index-1], channel.Filters[index:]...)
 
-	if err := h.storage.SaveChannel(channel); err != nil {
+	if err := h.channelService.SaveChannel(channel); err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("❌ Failed to remove filter: %v", err),
@@ -522,7 +451,7 @@ func (h *BotHandler) handleRemoveFilter(ctx context.Context, b *bot.Bot, update 
 	})
 }
 
-func (h *BotHandler) handleRSSLink(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleRSSLink(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.checkAuthorization(update.Message.From.ID) {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -539,7 +468,7 @@ func (h *BotHandler) handleRSSLink(ctx context.Context, b *bot.Bot, update *mode
 
 	if channelID == "" {
 		// List all RSS links
-		channels, err := h.storage.GetAllChannels()
+		channels, err := h.channelService.GetAllChannels()
 		if err != nil {
 			b.SendMessage(ctx, &bot.SendMessageParams{
 				ChatID: update.Message.Chat.ID,
@@ -563,7 +492,7 @@ func (h *BotHandler) handleRSSLink(ctx context.Context, b *bot.Bot, update *mode
 	}
 
 	// Get specific channel RSS link
-	channel, err := h.storage.GetChannel(channelID)
+	channel, err := h.channelService.GetChannel(channelID)
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -579,7 +508,7 @@ func (h *BotHandler) handleRSSLink(ctx context.Context, b *bot.Bot, update *mode
 	})
 }
 
-func (h *BotHandler) handleStatus(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (h *Handler) handleStatus(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.checkAuthorization(update.Message.From.ID) {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -588,7 +517,7 @@ func (h *BotHandler) handleStatus(ctx context.Context, b *bot.Bot, update *model
 		return
 	}
 
-	channels, err := h.storage.GetAllChannels()
+	channels, err := h.channelService.GetAllChannels()
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,

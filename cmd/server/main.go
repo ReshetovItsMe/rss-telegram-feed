@@ -8,13 +8,16 @@ import (
 	"syscall"
 
 	"github.com/go-telegram/bot"
+	"github.com/reshetovitsme/rss-telegram-feed/internal/di"
+	channelService "github.com/reshetovitsme/rss-telegram-feed/internal/modules/channel/service"
+	httpServer "github.com/reshetovitsme/rss-telegram-feed/internal/transport/http"
+	"github.com/reshetovitsme/rss-telegram-feed/internal/shared/config"
 	"github.com/samber/do/v2"
 	slogmulti "github.com/samber/slog-multi"
 )
 
 func main() {
 	// Setup structured logging with multiple handlers using slog-multi
-	// Fanout sends logs to multiple handlers simultaneously
 	textHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})
@@ -28,35 +31,35 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Setup dependency injection
-	injector, err := SetupDI()
+	injector, err := di.Setup()
 	if err != nil {
 		slog.Error("Failed to setup dependency injection", "error", err)
 		os.Exit(1)
 	}
 	defer func() {
-		if err := ShutdownDI(injector); err != nil {
+		if err := di.Shutdown(injector); err != nil {
 			slog.Error("Error during shutdown", "error", err)
 		}
 	}()
 
 	// Get services from DI container
-	cfg := do.MustInvoke[*Config](injector)
-	channelMonitor := do.MustInvoke[*ChannelMonitor](injector)
-	rssServer := do.MustInvoke[*RSSServer](injector)
-	_ = do.MustInvoke[*bot.Bot](injector) // Initialize bot (already done in SetupDI)
+	cfg := do.MustInvoke[*config.Config](injector)
+	channelService := do.MustInvoke[*channelService.Service](injector)
+	httpServer := do.MustInvoke[*httpServer.Server](injector)
+	_ = do.MustInvoke[*bot.Bot](injector) // Initialize bot (already done in Setup)
 
-	// Start channel monitor
-	go channelMonitor.Start(context.Background())
+	// Start channel monitoring
+	go channelService.Start(context.Background())
 
-	// Start RSS HTTP server
+	// Start HTTP server
 	go func() {
-		if err := rssServer.Start(); err != nil {
-			slog.Error("Failed to start RSS server", "error", err)
+		if err := httpServer.Start(); err != nil {
+			slog.Error("Failed to start HTTP server", "error", err)
 			os.Exit(1)
 		}
 	}()
 
-	slog.Info("Bot started", "port", cfg.HTTPPort)
+	slog.Info("Application started", "port", cfg.HTTPPort)
 	slog.Info("Press Ctrl+C to stop")
 
 	// Graceful shutdown
