@@ -1,0 +1,22 @@
+# Configuration file for local development
+# Copy this file to config.yaml and fill in your values
+# This file is only loaded when APP_ENV=local
+
+# Telegram Bot Configuration
+telegram_bot_token: "your_bot_token_here"
+telegram_api_url: "https://api.telegram.org"
+
+# HTTP Server Configuration
+http_port: "8080"
+
+# Storage Configuration
+storage_path: "./data"
+
+# Update Configuration
+update_interval: 60
+
+# Access Control (comma-separated user IDs)
+# allowed_users: [123456789, 987654321]
+
+# Application Environment
+app_env: "local"
