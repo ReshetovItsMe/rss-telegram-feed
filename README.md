@@ -316,10 +316,6 @@ task dev        # Start development environment
 └── README.md            # This file
 ```
 
-## License
-
-MIT License
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
